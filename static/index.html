@@ -1,1 +1,634 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DUPR Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;600&display=swap" rel="stylesheet">
+<script src="/static/chart.umd.js"></script>
+<script src="/static/hammer.min.js"></script>
+<script src="/static/chartjs-plugin-zoom.min.js"></script>
+<style>
+  :root{
+    --bg:#05070c; --panel:#0d1420; --border:#1c2942;
+    --ink:#f0f4fa; --muted:#7d8ca3; --dim:#4a5568;
+    --mint:#2d7ff9; --mint-hi:#5599ff; --red:#ff4444;
+    --chart-bg:#080d16; --chart-grid:#1a2438;
+  }
+  *{box-sizing:border-box;margin:0}
+  body{background:var(--bg);color:var(--ink);font-family:'DM Sans',sans-serif;min-height:100vh}
+  h1,h2,h3,.mono{font-family:'Space Mono',monospace}
+  .wrap{max-width:1100px;margin:0 auto;padding:32px 20px 80px}
 
+  header{margin-bottom:8px}
+  h1{font-size:2.2rem;letter-spacing:-0.02em}
+  h1 em{color:var(--mint);font-style:normal}
+  .tagline{color:var(--muted);font-size:.95rem}
+  #whoami{color:var(--muted);font-size:13px;margin-top:6px}
+  #whoami button{background:none;border:none;color:var(--muted);text-decoration:underline;cursor:pointer;font:inherit}
+  hr{border:none;border-top:1px solid var(--border);margin:24px 0}
+
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:22px;margin-bottom:20px}
+  .card h2{font-size:1rem;letter-spacing:.02em;margin-bottom:14px}
+  label{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px}
+  input{width:100%;padding:10px 12px;border-radius:4px;border:1px solid var(--border);
+        background:#0a101c;color:var(--ink);font:inherit;font-size:15px}
+  input:focus{outline:1px solid var(--mint);border-color:var(--mint)}
+  input[type=number]{width:110px}
+  button.primary{margin-top:14px;padding:.5rem 2rem;border:none;border-radius:4px;cursor:pointer;
+    background:var(--mint);color:#ffffff;font-family:'Space Mono',monospace;font-weight:700;
+    font-size:14px;letter-spacing:.04em;transition:all .2s}
+  button.primary:hover{background:var(--mint-hi);transform:translateY(-1px)}
+  button:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+  .row{display:flex;gap:14px;align-items:end;flex-wrap:wrap}
+  .row>div{flex:1 1 220px;min-width:170px}
+  .row>.tight{flex:0 0 auto;min-width:0}
+  .row label,button.primary{white-space:nowrap}
+  .note{font-size:12px;color:var(--dim);margin-top:12px;line-height:1.5}
+  .error{color:var(--red);font-size:13px;margin-top:10px;min-height:16px;font-family:'Space Mono',monospace}
+
+  /* player header + stat pills */
+  #playerHead{display:none}
+  #playerName{font-size:1.6rem;margin-bottom:.1rem}
+  #playerId{color:var(--dim);font-size:.85rem}
+  .pills{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-top:16px}
+  .pill{background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:14px 16px}
+  .pill .k{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-family:'Space Mono',monospace}
+  .pill .v{font-family:'Space Mono',monospace;font-size:1.7rem;font-weight:700;margin-top:2px}
+
+  /* chart grid */
+  #chartsSection{display:none}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  .grid1{display:grid;grid-template-columns:1fr;gap:20px}
+  @media (max-width:820px){.grid2{grid-template-columns:1fr}}
+  .chartCard{background:var(--chart-bg);border:1px solid var(--border);border-radius:6px;padding:14px}
+  .chartCard h3{font-size:.75rem;font-weight:700;color:var(--ink);margin-bottom:8px}
+  .chartCard .empty{color:var(--dim);font-size:.8rem;padding:30px 0;text-align:center;font-family:'Space Mono',monospace}
+  .cv{position:relative;height:380px}
+
+  /* analytics tables */
+  #analyticsSection{display:none}
+  .tblWrap{overflow-x:auto}
+  table{width:100%;border-collapse:collapse;font-size:13px;white-space:nowrap}
+  th{text-align:right;color:var(--muted);font-weight:400;font-family:'Space Mono',monospace;font-size:11px;
+     letter-spacing:.04em;padding:6px 10px;border-bottom:1px solid var(--border)}
+  th.sortable{cursor:pointer;user-select:none}
+  th.sortable:hover{color:var(--ink)}
+  th:first-child,td:first-child{text-align:left}
+  td{text-align:right;padding:7px 10px;border-bottom:1px solid #16203a;font-variant-numeric:tabular-nums}
+  .pos{color:var(--mint)} .neg{color:var(--red)} .zero{color:var(--muted)}
+
+  footer{color:#333;font-size:.75rem;text-align:center;margin-top:40px}
+  @media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>DUPR <em>Dashboard</em></h1>
+    <div id="whoami"></div>
+  </header>
+  <hr>
+
+  <!-- LOGIN -->
+  <section class="card" id="loginCard">
+    <h2>Sign in with your DUPR account</h2>
+    <div class="row">
+      <div><label for="email">Email</label><input id="email" type="email" autocomplete="email"></div>
+      <div><label for="password">Password</label><input id="password" type="password" autocomplete="current-password"></div>
+      <div class="tight"><button class="primary" id="loginBtn">Sign in</button></div>
+    </div>
+    <p class="error" id="loginError"></p>
+    <p class="note">
+      You sign in with your own DUPR credentials, which are sent to DUPR and never stored by this
+      site — only a temporary access token is kept in your browser for this session. This site is
+      not affiliated with DUPR; it uses the same interface as the DUPR app, and DUPR may change or
+      restrict it at any time. Use at your own risk.
+    </p>
+  </section>
+
+  <!-- SEARCH -->
+  <section class="card" id="searchCard" style="display:none">
+    <h2>Generate dashboard</h2>
+    <div class="row">
+      <div><label for="duprId">DUPR ID (e.g. ABCDEF)</label><input id="duprId" placeholder="ABCDEF"></div>
+      <div class="tight"><label for="minMatches">Min matches</label><input id="minMatches" type="number" min="1" step="1" value="10"></div>
+      <div class="tight"><button class="primary" id="searchBtn">Generate</button></div>
+      <div class="tight"><button class="primary" id="meBtn" style="background:#111a2b;color:var(--mint);border:1px solid var(--border)">My dashboard</button></div>
+    </div>
+    <p class="error" id="searchError"></p>
+  </section>
+
+  <!-- PLAYER HEADER + PILLS -->
+  <section id="playerHead">
+    <h2 id="playerName"></h2>
+    <p id="playerId" class="mono"></p>
+    <div class="pills">
+      <div class="pill"><div class="k">Doubles Rating</div><div class="v" id="pillDoubles">–</div></div>
+      <div class="pill"><div class="k">Singles Rating</div><div class="v" id="pillSingles">–</div></div>
+    </div>
+    <hr>
+  </section>
+
+  <!-- CHARTS -->
+  <section id="chartsSection">
+    <h2 class="mono" style="margin-bottom:4px">Rating History</h2>
+    <p class="note" style="margin:0 0 14px">scroll to zoom &middot; drag to pan &middot; double-click to reset</p>
+    <div class="grid1">
+      <div class="chartCard"><h3>All Doubles Matches</h3><div class="cv"><canvas id="cDoublesAll"></canvas></div></div>
+      <div class="chartCard"><h3>All Singles Matches</h3><div class="cv"><canvas id="cSinglesAll"></canvas></div></div>
+      <div class="chartCard"><h3>Doubles — Daily Final</h3><div class="cv"><canvas id="cDoublesDaily"></canvas></div></div>
+      <div class="chartCard"><h3>Singles — Daily Final</h3><div class="cv"><canvas id="cSinglesDaily"></canvas></div></div>
+    </div>
+    <hr>
+  </section>
+
+  <!-- ANALYTICS -->
+  <section id="analyticsSection">
+    <h2 class="mono" style="margin-bottom:6px">Partner &amp; Opponent Analytics</h2>
+    <p class="note" id="matchNote" style="margin:0 0 14px"></p>
+    <div class="grid2">
+      <div class="card" style="margin:0">
+        <h2>Top Partners <span style="color:var(--dim);font-size:.75rem" id="minLabelP"></span></h2>
+        <div class="tblWrap"><table id="partnerTable"></table></div>
+      </div>
+      <div class="card" style="margin:0">
+        <h2>Frequent Opponents <span style="color:var(--dim);font-size:.75rem" id="minLabelO"></span></h2>
+        <div class="tblWrap"><table id="opponentTable"></table></div>
+      </div>
+    </div>
+  </section>
+
+  <footer>DUPR Dashboard · not affiliated with DUPR</footer>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const state = {
+  token: sessionStorage.getItem('dupr_token'),
+  name: sessionStorage.getItem('dupr_name'),
+  player: null,
+  charts: {},          // canvasId -> Chart
+  partnerStats: null,  // Map name -> {w,l,gp,delta}
+  opponentStats: null,
+  matchesFor: null,
+};
+
+// ---------- api ----------
+async function api(path, opts={}) {
+  const headers = {'Content-Type':'application/json'};
+  if (state.token) headers['Authorization'] = 'Bearer ' + state.token;
+  const r = await fetch(path, {...opts, headers});
+  const data = await r.json().catch(()=>({}));
+  if (!r.ok) {
+    if (r.status === 401 && state.token) logout();
+    throw new Error(data.error || ('Request failed (' + r.status + ')'));
+  }
+  return data;
+}
+
+// ---------- auth ----------
+function showApp(){
+  $('loginCard').style.display = 'none';
+  $('searchCard').style.display = 'block';
+  $('whoami').innerHTML = (state.name ? state.name + ' · ' : '') + '<button id="logoutBtn">Sign out</button>';
+  $('logoutBtn').onclick = logout;
+}
+function logout(){ sessionStorage.clear(); location.reload(); }
+$('loginBtn').onclick = async () => {
+  $('loginError').textContent = '';
+  try {
+    const d = await api('/api/login', {method:'POST',
+      body: JSON.stringify({email: $('email').value.trim(), password: $('password').value})});
+    state.token = d.accessToken;
+    state.name  = d.fullName || '';
+    sessionStorage.setItem('dupr_token', state.token);
+    sessionStorage.setItem('dupr_name', state.name);
+    $('password').value = '';
+    showApp();
+  } catch(e){ $('loginError').textContent = e.message; }
+};
+$('password').addEventListener('keydown', e => { if (e.key === 'Enter') $('loginBtn').click(); });
+
+// ---------- dashboard flow ----------
+$('searchBtn').onclick = async () => {
+  $('searchError').textContent = '';
+  const q = $('duprId').value.trim();
+  if (!q){ $('searchError').textContent = 'Enter a DUPR ID.'; return; }
+  try {
+    const p = await api('/api/player/' + encodeURIComponent(q));
+    state.player = p;
+    await buildDashboard();
+  } catch(e){ $('searchError').textContent = e.message; }
+};
+$('meBtn').onclick = async () => {
+  $('searchError').textContent = '';
+  try {
+    const p = await api('/api/profile');
+    state.player = {id: p.id, fullName: p.fullName || state.name, duprId: p.duprId || ''};
+    await buildDashboard();
+  } catch(e){ $('searchError').textContent = e.message; }
+};
+$('minMatches').addEventListener('change', () => renderTables());
+
+async function buildDashboard(){
+  $('searchError').textContent = 'Fetching rating history\u2026';
+  const [d, s] = await Promise.all([
+    api('/api/rating-history/' + state.player.id + '?type=DOUBLES'),
+    api('/api/rating-history/' + state.player.id + '?type=SINGLES'),
+  ]);
+  $('searchError').textContent = '';
+
+  // keep the untouched API records for export/debugging
+  state.rawHistory = {DOUBLES: d.history || [], SINGLES: s.history || []};
+  const leakFix = stripCrossTypeLeaks(d.history || [], s.history || []);
+  const dSpike = stripSpikes(cleanRows(leakFix.d));
+  const sSpike = stripSpikes(cleanRows(leakFix.s));
+  if (dSpike.removed.length || sSpike.removed.length){
+    console.warn('[spike filter] removed:', [...dSpike.removed, ...sSpike.removed]);
+  }
+  const dRows = dSpike.kept, sRows = sSpike.kept;
+  if (!state.player.fullName) state.player.fullName = d.fullName || s.fullName || ('Player ' + state.player.id);
+
+  // header + pills
+  $('playerHead').style.display = 'block';
+  $('playerName').textContent = state.player.fullName;
+  $('playerId').textContent = 'ID: ' + state.player.id + (state.player.duprId ? ' · ' + state.player.duprId : '');
+  $('pillDoubles').textContent = dRows.length ? dRows[dRows.length-1].rating.toFixed(3) : 'N/A';
+  $('pillSingles').textContent = sRows.length ? sRows[sRows.length-1].rating.toFixed(3) : 'N/A';
+
+  // the four plotted series — used by the charts AND the exports
+  state.series = {
+    DOUBLES_ALL:         deltaFilter(dRows),
+    SINGLES_ALL:         deltaFilter(sRows),
+    DOUBLES_DAILY_FINAL: deltaFilter(dailyFinal(dRows)),
+    SINGLES_DAILY_FINAL: deltaFilter(dailyFinal(sRows)),
+  };
+
+  // charts — failures here must never block the analytics below
+  $('chartsSection').style.display = 'block';
+  if (typeof Chart === 'undefined'){
+    $('searchError').textContent =
+      'Chart library failed to load from /static/chart.umd.js — check the file is in the static folder and RESTART the server (the /static route is new in main.py).';
+  } else {
+    const panels = [
+      ['cDoublesAll',   state.series.DOUBLES_ALL],
+      ['cSinglesAll',   state.series.SINGLES_ALL],
+      ['cDoublesDaily', state.series.DOUBLES_DAILY_FINAL],
+      ['cSinglesDaily', state.series.SINGLES_DAILY_FINAL],
+    ];
+    for (const [id, rows] of panels){
+      try { drawChart(id, rows); }
+      catch(e){ $('searchError').textContent = 'Chart error (' + id + '): ' + e.message; }
+    }
+  }
+
+  // analytics (once per player)
+  if (state.matchesFor !== state.player.id){
+    state.matchesFor = state.player.id;
+    loadAnalytics();
+  }
+}
+
+// ---------- rating data prep (mirrors the original pandas pipeline) ----------
+// DUPR sometimes files a match into BOTH rating feeds (e.g. a singles match
+// showing up in the doubles history with the singles rating — visible as a
+// spike). A record with the same date+rating in both feeds is the same match
+// duplicated; keep it only in the series whose surrounding trend it fits.
+function stripCrossTypeLeaks(dRaw, sRaw){
+  const key = r => (r && typeof r.rating === 'number' && typeof r.matchDate === 'string')
+    ? r.matchDate.slice(0,10) + '|' + r.rating : null;
+  const keysOf = arr => new Set(arr.map(key).filter(Boolean));
+  const dKeys = keysOf(dRaw), sKeys = keysOf(sRaw);
+  const dups = new Set([...dKeys].filter(k => sKeys.has(k)));
+  if (!dups.size) return {d: dRaw, s: sRaw, removed: []};
+
+  // distance from a record to the nearest NON-duplicate neighbor in a series
+  const trendDist = (arr, idx) => {
+    for (let off = 1; off < arr.length; off++){
+      for (const j of [idx - off, idx + off]){
+        if (j >= 0 && j < arr.length){
+          const k = key(arr[j]);
+          if (k && !dups.has(k)) return Math.abs(arr[idx].rating - arr[j].rating);
+        }
+      }
+    }
+    return Infinity;
+  };
+
+  const removed = [];
+  const filterFeed = (arr, other, feedName) => arr.filter((r, i) => {
+    const k = key(r);
+    if (!k || !dups.has(k)) return true;
+    const oIdx = other.findIndex(x => key(x) === k);
+    const dHere  = trendDist(arr, i);
+    const dThere = oIdx >= 0 ? trendDist(other, oIdx) : Infinity;
+    if (dHere > dThere){  // fits the other series better -> it leaked into this one
+      removed.push({feed: feedName, matchDate: r.matchDate, rating: r.rating});
+      return false;
+    }
+    return true;          // ties/uncertain: keep (conservative)
+  });
+
+  const d = filterFeed(dRaw, sRaw, 'DOUBLES');
+  const s = filterFeed(sRaw, dRaw, 'SINGLES');
+  if (removed.length) console.warn('[cross-type filter] removed leaked entries:', removed);
+  return {d, s, removed};
+}
+
+// Spike filter, tuned to avoid false positives:
+//  - a point is only compared to neighbors within 60 days (no cross-era judging
+//    after long breaks; fewer than 3 recent neighbors = point is kept)
+//  - the threshold adapts to local volatility: max(0.25, 5x the median step
+//    between neighbors), so low-reliability players with legitimately large
+//    swings raise their own bar, while feed glitches (e.g. a singles value
+//    misfiled into the doubles history) still deviate far beyond it.
+function stripSpikes(rows, floor = 0.25, win = 3, k = 5, maxGapDays = 60){
+  const removed = [];
+  const days = rows.map(r => Date.parse(r.matchDate.slice(0,10)) / 86400000);
+  const median = a => {
+    const s = [...a].sort((x,y) => x - y), m = s.length >> 1;
+    return s.length % 2 ? s[m] : (s[m-1] + s[m]) / 2;
+  };
+  const kept = rows.filter((r, i) => {
+    const lo = Math.max(0, i - win), hi = Math.min(rows.length, i + win + 1);
+    const idx = [];
+    for (let j = lo; j < hi; j++)
+      if (j !== i && Math.abs(days[j] - days[i]) <= maxGapDays) idx.push(j);
+    if (idx.length < 3) return true;
+    const med = median(idx.map(j => rows[j].rating));
+    const steps = [];
+    for (const j of idx) if (idx.includes(j - 1))
+      steps.push(Math.abs(rows[j].rating - rows[j-1].rating));
+    const threshold = Math.max(floor, k * (steps.length ? median(steps) : 0));
+    if (Math.abs(r.rating - med) > threshold){
+      removed.push({matchDate: r.matchDate, rating: r.rating, threshold: +threshold.toFixed(3)});
+      return false;
+    }
+    return true;
+  });
+  return {kept, removed};
+}
+
+function cleanRows(history){
+  let rows = (history || []).filter(h =>
+    h && typeof h.matchDate === 'string' && h.matchDate &&
+    typeof h.rating === 'number' && h.rating > 0);
+  // API returns asc, but don't assume — reverse if newest-first (preserves intra-day order)
+  if (rows.length > 1 && new Date(rows[0].matchDate) > new Date(rows[rows.length-1].matchDate)){
+    rows = rows.slice().reverse();
+  }
+  // Guarantee chronological order: STABLE sort by day, with original feed
+  // position as the tiebreak so same-day match order is never scrambled.
+  rows = rows
+    .map((r, i) => [r, i])
+    .sort((a, b) => {
+      const d = a[0].matchDate.slice(0,10).localeCompare(b[0].matchDate.slice(0,10));
+      return d !== 0 ? d : a[1] - b[1];
+    })
+    .map(x => x[0]);
+  return rows;
+}
+function dailyFinal(rows){
+  const byDay = new Map();
+  rows.forEach(h => byDay.set(h.matchDate.slice(0,10), h)); // last per day wins
+  return [...byDay.values()];
+}
+function deltaFilter(rows){
+  const out = [];
+  rows.forEach(h => {
+    if (!out.length || out[out.length-1].rating !== h.rating) out.push(h);
+  });
+  return out;
+}
+
+// ---------- charts ----------
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function monLabel(iso){
+  const d = new Date(iso);
+  return MONTHS[d.getMonth()] + " '" + String(d.getFullYear()).slice(2);
+}
+// draws the final rating value in mint at the end of the line
+const lastLabelPlugin = {
+  id: 'lastLabel',
+  afterDatasetsDraw(chart){
+    const ds = chart.data.datasets[0];
+    if (!ds || !ds.data.length) return;
+    const meta = chart.getDatasetMeta(0);
+    const pt = meta.data[meta.data.length - 1];
+    if (!pt) return;
+    const ctx = chart.ctx;
+    ctx.save();
+    ctx.fillStyle = '#ff4d4d';
+    ctx.font = "bold 11px 'Space Mono', monospace";
+    ctx.textBaseline = 'middle';
+    ctx.fillText(' ' + ds.data[ds.data.length-1].toFixed(3), Math.min(pt.x + 4, chart.chartArea.right - 46), pt.y);
+    ctx.restore();
+  }
+};
+
+function drawChart(canvasId, rows){
+  const card = $(canvasId).parentElement;
+  if (state.charts[canvasId]){ state.charts[canvasId].destroy(); delete state.charts[canvasId]; }
+  let empty = card.querySelector('.emptyMsg');
+  if (empty) empty.remove();
+  if (!rows.length){
+    $(canvasId).style.display = 'none';
+    card.insertAdjacentHTML('beforeend', '<div class="empty emptyMsg">no data</div>');
+    return;
+  }
+  $(canvasId).style.display = 'block';
+  state.charts[canvasId] = new Chart($(canvasId), {
+    type: 'line',
+    data: {
+      labels: rows.map(r => monLabel(r.matchDate)),
+      datasets: [{
+        data: rows.map(r => r.rating),
+        borderColor: '#ff4d4d', borderWidth: 1.8,
+        pointBackgroundColor: '#ffffff', pointBorderColor: '#ffffff',
+        pointRadius: 2.2, pointHoverRadius: 5,
+        tension: 0, fill: false,
+      }]
+    },
+    options: {
+      maintainAspectRatio: false, animation: false,
+      layout: {padding: {right: 48}},
+      scales: {
+        x: { ticks:{color:'#888', maxTicksLimit:7, maxRotation:30, font:{family:"'Space Mono', monospace", size:9}},
+             grid:{color:'#1a2438'} },
+        y: { ticks:{color:'#888', font:{family:"'Space Mono', monospace", size:9}},
+             grid:{color:'#1a2438'} },
+      },
+      plugins: {
+        legend:{display:false},
+        zoom: {
+          limits: { x: {min:'original', max:'original', minRange: 5} },
+          zoom: {
+            wheel: {enabled: true},
+            pinch: {enabled: true},
+            mode: 'x',
+          },
+          pan: {enabled: true, mode: 'x'},
+        },
+        tooltip:{
+          backgroundColor:'#0e0e0e', borderColor:'#2a2a2a', borderWidth:1,
+          titleFont:{family:"'Space Mono', monospace"}, bodyFont:{family:"'Space Mono', monospace"},
+          callbacks:{
+            title: items => rows[items[0].dataIndex].matchDate.slice(0,10),
+            label: c => 'DUPR ' + c.parsed.y.toFixed(3),
+          }
+        }
+      }
+    },
+    plugins: [lastLabelPlugin],
+  });
+  // If the container was hidden/mid-layout at creation, Chart.js measured 0x0.
+  // Force a re-measure on the next frame so the chart always paints.
+  requestAnimationFrame(() => { const ch = state.charts[canvasId]; if (ch) ch.resize(); });
+  $(canvasId).ondblclick = () => { const ch = state.charts[canvasId]; if (ch) ch.resetZoom(); };
+}
+
+// ---------- partner / opponent analytics ----------
+async function loadAnalytics(){
+  $('analyticsSection').style.display = 'block';
+  $('partnerTable').innerHTML = ''; $('opponentTable').innerHTML = '';
+  $('matchNote').textContent = 'Fetching full match history — long careers can take a minute\u2026';
+  try {
+    const d = await api('/api/match-history/' + state.player.id);
+    computeStats(d.matches || []);
+    renderTables();
+  } catch(e){
+    $('matchNote').textContent = 'Match stats unavailable: ' + e.message;
+  }
+}
+
+function computeStats(matches){
+  const meId = String(state.player.id);
+  const meName = (state.player.fullName || '').trim().toLowerCase();
+  const isMe = p => p && (String(p.id) === meId ||
+    (p.fullName || '').trim().toLowerCase() === meName);
+
+  const partners = new Map(), opponents = new Map();
+  const bump = (map, name, won, delta) => {
+    const s = map.get(name) || {w:0, l:0, gp:0, delta:0};
+    s.gp++; won ? s.w++ : s.l++;
+    if (delta != null && isFinite(delta)) s.delta += delta;
+    map.set(name, s);
+  };
+
+  let counted = 0, totalW = 0, totalL = 0;
+  matches.forEach(m => {
+    const teams = m.teams || [];
+    if (teams.length < 2) return;
+    let mine = null, theirs = null;
+    teams.forEach(t => {
+      if ([t.player1, t.player2].some(isMe)) mine = t; else theirs = t;
+    });
+    if (!mine || !theirs) return;
+    counted++;
+    const won = mine.winner === true;
+    won ? totalW++ : totalL++;
+
+    // my per-match rating impact, keyed by whether I'm player1 or player2
+    const pre = mine.preMatchRatingAndImpact || {};
+    let delta = null;
+    if (isMe(mine.player1))      delta = pre.matchDoubleRatingImpactPlayer1;
+    else if (isMe(mine.player2)) delta = pre.matchDoubleRatingImpactPlayer2;
+    if (typeof delta !== 'number') delta = null;
+
+    [mine.player1, mine.player2].forEach(p => {
+      if (p && !isMe(p) && (p.fullName || p.id))
+        bump(partners, p.fullName || ('#'+p.id), won, delta);
+    });
+    [theirs.player1, theirs.player2].forEach(p => {
+      if (p && (p.fullName || p.id))
+        bump(opponents, p.fullName || ('#'+p.id), won, delta);
+    });
+  });
+
+  state.partnerStats = partners;
+  state.opponentStats = opponents;
+  $('matchNote').textContent = 'Based on ' + counted + ' matches · W\u2013L and DUPR +/- shown from ' +
+    (state.player.fullName || 'this player') + "'s side";
+}
+
+const esc = s => String(s).replace(/[&<>"]/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const cls = v => v > 0 ? 'pos' : (v < 0 ? 'neg' : 'zero');
+const signed = (v, dp) => (v >= 0 ? '+' : '') + v.toFixed(dp);
+
+function renderTables(){
+  if (!state.partnerStats) return;
+  const min = Math.max(1, parseInt($('minMatches').value) || 1);
+  $('minLabelP').textContent = '(min ' + min + ' matches)';
+  $('minLabelO').textContent = '(min ' + min + ' matches)';
+  fillTable('partnerTable', state.partnerStats, min);
+  fillTable('opponentTable', state.opponentStats, min);
+}
+
+// column definitions: key -> label; numeric columns default to descending
+const COLS = [
+  ['name','Player'], ['w','W'], ['l','L'], ['gp','GP'],
+  ['winPct','Win %'], ['delta','DUPR +/-'], ['perMatch','Per Match'],
+];
+// per-table sort state (click a header to sort by it; click again to flip)
+state.tableSort = {
+  partnerTable:  {key:'perMatch', dir:-1},
+  opponentTable: {key:'perMatch', dir:-1},
+};
+
+function fillTable(id, map, min){
+  const sort = state.tableSort[id];
+  const rows = [...map.entries()]
+    .filter(([,s]) => s.gp >= min)
+    .map(([name, s]) => ({name, ...s,
+      winPct: s.w / s.gp * 100, perMatch: s.delta / s.gp}));
+
+  rows.sort((a,b) => {
+    const va = a[sort.key], vb = b[sort.key];
+    const cmp = (typeof va === 'string')
+      ? va.localeCompare(vb)
+      : (va - vb);
+    return cmp * sort.dir;
+  });
+
+  if (!rows.length){
+    $(id).innerHTML = '<tr><td class="zero" style="text-align:left">No players with ' + min + '+ matches.</td></tr>';
+    return;
+  }
+  const arrow = k => k === sort.key ? (sort.dir === -1 ? ' \u25BE' : ' \u25B4') : '';
+  $(id).innerHTML =
+    '<tr>' + COLS.map(([k, label]) =>
+      '<th class="sortable" data-key="' + k + '">' + label + arrow(k) + '</th>').join('') + '</tr>' +
+    rows.map(r =>
+      '<tr><td>' + esc(r.name) + '</td>' +
+      '<td>' + r.w + '</td><td>' + r.l + '</td><td>' + r.gp + '</td>' +
+      '<td>' + r.winPct.toFixed(1) + '%</td>' +
+      '<td class="' + cls(r.delta) + '">' + signed(r.delta, 3) + '</td>' +
+      '<td class="' + cls(r.perMatch) + '">' + signed(r.perMatch, 4) + '</td></tr>'
+    ).join('');
+
+  $(id).querySelectorAll('th.sortable').forEach(th => {
+    th.onclick = () => {
+      const k = th.dataset.key;
+      if (sort.key === k) sort.dir *= -1;
+      else { sort.key = k; sort.dir = (k === 'name') ? 1 : -1; }
+      fillTable(id, map, Math.max(1, parseInt($('minMatches').value) || 1));
+    };
+  });
+}
+
+// ---------- boot ----------
+window.addEventListener('error', e => {
+  const box = $('searchError') || $('loginError');
+  if (box) box.textContent = 'Unexpected error: ' + (e.message || e.error);
+});
+window.addEventListener('unhandledrejection', e => {
+  const box = $('searchError') || $('loginError');
+  if (box) box.textContent = 'Unexpected error: ' + (e.reason && e.reason.message || e.reason);
+});
+if (state.token) showApp();
+</script>
+</body>
+</html>
