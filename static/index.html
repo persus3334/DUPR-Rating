@@ -60,8 +60,14 @@
   /* chart grid */
   #chartsSection{display:none}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px}
   .grid1{display:grid;grid-template-columns:1fr;gap:20px}
   @media (max-width:820px){.grid2{grid-template-columns:1fr}}
+  /* three tables side by side are tight — tighten cells, then stack when narrow */
+  .grid3 .card{padding:16px}
+  .grid3 table{font-size:12px}
+  .grid3 th,.grid3 td{padding:6px 6px}
+  @media (max-width:1000px){.grid3{grid-template-columns:1fr}}
   .chartCard{background:var(--chart-bg);border:1px solid var(--border);border-radius:6px;padding:14px}
   .chartCard h3{font-size:.75rem;font-weight:700;color:var(--ink);margin-bottom:8px}
   .chartCard .empty{color:var(--dim);font-size:.8rem;padding:30px 0;text-align:center;font-family:'Space Mono',monospace}
@@ -151,18 +157,17 @@
   <section id="analyticsSection">
     <h2 class="mono" style="margin-bottom:6px">Partner &amp; Opponent Analytics</h2>
     <p class="note" id="matchNote" style="margin:0 0 14px"></p>
-    <!-- Single column layout with three tables -->
-    <div class="grid1">
+    <div class="grid3">
       <div class="card" style="margin:0">
-        <h2>Top Partners (Doubles) <span style="color:var(--dim);font-size:.75rem" id="minLabelPD"></span></h2>
-        <div class="tblWrap"><table id="partnerTableD"></table></div>
+        <h2>Top Partners <span style="color:var(--dim);font-size:.75rem" id="minLabelP"></span></h2>
+        <div class="tblWrap"><table id="partnerTable"></table></div>
       </div>
       <div class="card" style="margin:0">
-        <h2>Frequent Opponents (Doubles) <span style="color:var(--dim);font-size:.75rem" id="minLabelOD"></span></h2>
+        <h2>Doubles Opponents <span style="color:var(--dim);font-size:.75rem" id="minLabelOD"></span></h2>
         <div class="tblWrap"><table id="opponentTableD"></table></div>
       </div>
       <div class="card" style="margin:0">
-        <h2>Frequent Opponents (Singles) <span style="color:var(--dim);font-size:.75rem" id="minLabelOS"></span></h2>
+        <h2>Singles Opponents <span style="color:var(--dim);font-size:.75rem" id="minLabelOS"></span></h2>
         <div class="tblWrap"><table id="opponentTableS"></table></div>
       </div>
     </div>
@@ -187,9 +192,12 @@ const state = {
   token: sessionStorage.getItem('dupr_token'),
   name: sessionStorage.getItem('dupr_name'),
   player: null,
-  charts: {},
-  stats: null, // { doubles: {partners, opponents}, singles: {opponents} } (no partners for singles)
-  allMatches: null,
+  charts: {},          // canvasId -> Chart
+  partnerStats: null,   // Map name -> {w,l,gp,delta}  (doubles partners)
+  opponentStatsD: null, // doubles opponents
+  opponentStatsS: null, // singles opponents
+  matchesFor: null,
+  allMatches: null,     // raw match list, kept for head-to-head search
 };
 
 // ---------- api ----------
@@ -257,6 +265,7 @@ async function buildDashboard(){
   ]);
   $('searchError').textContent = '';
 
+  // keep the untouched API records for export/debugging
   state.rawHistory = {DOUBLES: d.history || [], SINGLES: s.history || []};
   const leakFix = stripCrossTypeLeaks(d.history || [], s.history || []);
   const dSpike = stripSpikes(cleanRows(leakFix.d));
@@ -274,7 +283,7 @@ async function buildDashboard(){
   $('pillDoubles').textContent = dRows.length ? dRows[dRows.length-1].rating.toFixed(3) : 'N/A';
   $('pillSingles').textContent = sRows.length ? sRows[sRows.length-1].rating.toFixed(3) : 'N/A';
 
-  // series
+  // the four plotted series — used by the charts AND the exports
   state.series = {
     DOUBLES_ALL:         deltaFilter(dRows),
     SINGLES_ALL:         deltaFilter(sRows),
@@ -282,7 +291,7 @@ async function buildDashboard(){
     SINGLES_DAILY_FINAL: deltaFilter(dailyFinal(sRows)),
   };
 
-  // charts
+  // charts — failures here must never block the analytics below
   $('chartsSection').style.display = 'block';
   if (typeof Chart === 'undefined'){
     $('searchError').textContent =
@@ -300,14 +309,18 @@ async function buildDashboard(){
     }
   }
 
-  // analytics
+  // analytics (once per player)
   if (state.matchesFor !== state.player.id){
     state.matchesFor = state.player.id;
     loadAnalytics();
   }
 }
 
-// ---------- rating data prep ----------
+// ---------- rating data prep (mirrors the original pandas pipeline) ----------
+// DUPR sometimes files a match into BOTH rating feeds (e.g. a singles match
+// showing up in the doubles history with the singles rating — visible as a
+// spike). A record with the same date+rating in both feeds is the same match
+// duplicated; keep it only in the series whose surrounding trend it fits.
 function stripCrossTypeLeaks(dRaw, sRaw){
   const key = r => (r && typeof r.rating === 'number' && typeof r.matchDate === 'string')
     ? r.matchDate.slice(0,10) + '|' + r.rating : null;
@@ -316,6 +329,7 @@ function stripCrossTypeLeaks(dRaw, sRaw){
   const dups = new Set([...dKeys].filter(k => sKeys.has(k)));
   if (!dups.size) return {d: dRaw, s: sRaw, removed: []};
 
+  // distance from a record to the nearest NON-duplicate neighbor in a series
   const trendDist = (arr, idx) => {
     for (let off = 1; off < arr.length; off++){
       for (const j of [idx - off, idx + off]){
@@ -335,11 +349,11 @@ function stripCrossTypeLeaks(dRaw, sRaw){
     const oIdx = other.findIndex(x => key(x) === k);
     const dHere  = trendDist(arr, i);
     const dThere = oIdx >= 0 ? trendDist(other, oIdx) : Infinity;
-    if (dHere > dThere){
+    if (dHere > dThere){  // fits the other series better -> it leaked into this one
       removed.push({feed: feedName, matchDate: r.matchDate, rating: r.rating});
       return false;
     }
-    return true;
+    return true;          // ties/uncertain: keep (conservative)
   });
 
   const d = filterFeed(dRaw, sRaw, 'DOUBLES');
@@ -348,6 +362,13 @@ function stripCrossTypeLeaks(dRaw, sRaw){
   return {d, s, removed};
 }
 
+// Spike filter, tuned to avoid false positives:
+//  - a point is only compared to neighbors within 60 days (no cross-era judging
+//    after long breaks; fewer than 3 recent neighbors = point is kept)
+//  - the threshold adapts to local volatility: max(0.25, 5x the median step
+//    between neighbors), so low-reliability players with legitimately large
+//    swings raise their own bar, while feed glitches (e.g. a singles value
+//    misfiled into the doubles history) still deviate far beyond it.
 function stripSpikes(rows, floor = 0.25, win = 3, k = 5, maxGapDays = 60){
   const removed = [];
   const days = rows.map(r => Date.parse(r.matchDate.slice(0,10)) / 86400000);
@@ -379,9 +400,12 @@ function cleanRows(history){
   let rows = (history || []).filter(h =>
     h && typeof h.matchDate === 'string' && h.matchDate &&
     typeof h.rating === 'number' && h.rating > 0);
+  // API returns asc, but don't assume — reverse if newest-first (preserves intra-day order)
   if (rows.length > 1 && new Date(rows[0].matchDate) > new Date(rows[rows.length-1].matchDate)){
     rows = rows.slice().reverse();
   }
+  // Guarantee chronological order: STABLE sort by day, with original feed
+  // position as the tiebreak so same-day match order is never scrambled.
   rows = rows
     .map((r, i) => [r, i])
     .sort((a, b) => {
@@ -393,7 +417,7 @@ function cleanRows(history){
 }
 function dailyFinal(rows){
   const byDay = new Map();
-  rows.forEach(h => byDay.set(h.matchDate.slice(0,10), h));
+  rows.forEach(h => byDay.set(h.matchDate.slice(0,10), h)); // last per day wins
   return [...byDay.values()];
 }
 function deltaFilter(rows){
@@ -410,6 +434,7 @@ function monLabel(iso){
   const d = new Date(iso);
   return MONTHS[d.getMonth()] + " '" + String(d.getFullYear()).slice(2);
 }
+// draws the final rating value in mint at the end of the line
 const lastLabelPlugin = {
   id: 'lastLabel',
   afterDatasetsDraw(chart){
@@ -483,70 +508,22 @@ function drawChart(canvasId, rows){
     },
     plugins: [lastLabelPlugin],
   });
+  // If the container was hidden/mid-layout at creation, Chart.js measured 0x0.
+  // Force a re-measure on the next frame so the chart always paints.
   requestAnimationFrame(() => { const ch = state.charts[canvasId]; if (ch) ch.resize(); });
   $(canvasId).ondblclick = () => { const ch = state.charts[canvasId]; if (ch) ch.resetZoom(); };
 }
 
-// ---------- analytics ----------
-function computeStatsForFormat(matches, format) {
-  const meId = String(state.player.id);
-  const meName = (state.player.fullName || '').trim().toLowerCase();
-  const isMe = p => p && (String(p.id) === meId ||
-    (p.fullName || '').trim().toLowerCase() === meName);
-
-  const partners = new Map(), opponents = new Map();
-  const bump = (map, name, won, delta) => {
-    const s = map.get(name) || {w:0, l:0, gp:0, delta:0};
-    s.gp++; won ? s.w++ : s.l++;
-    if (delta != null && isFinite(delta)) s.delta += delta;
-    map.set(name, s);
-  };
-
-  matches.forEach(m => {
-    if ((m.format || '').toUpperCase() !== format) return;
-    const teams = m.teams || [];
-    if (teams.length < 2) return;
-    let mine = null, theirs = null;
-    teams.forEach(t => {
-      if ([t.player1, t.player2].some(isMe)) mine = t;
-      else theirs = t;
-    });
-    if (!mine || !theirs) return;
-    const won = mine.winner === true;
-    const pre = mine.preMatchRatingAndImpact || {};
-    let delta = null;
-    if (isMe(mine.player1)) delta = pre.matchDoubleRatingImpactPlayer1;
-    else if (isMe(mine.player2)) delta = pre.matchDoubleRatingImpactPlayer2;
-    if (typeof delta !== 'number') delta = null;
-
-    // For doubles, we have both players; for singles, one may be null.
-    // We'll still collect partners for doubles only.
-    [mine.player1, mine.player2].forEach(p => {
-      if (p && !isMe(p) && (p.fullName || p.id))
-        bump(partners, p.fullName || ('#'+p.id), won, delta);
-    });
-    [theirs.player1, theirs.player2].forEach(p => {
-      if (p && (p.fullName || p.id))
-        bump(opponents, p.fullName || ('#'+p.id), won, delta);
-    });
-  });
-
-  return { partners, opponents };
-}
-
+// ---------- partner / opponent analytics ----------
 async function loadAnalytics(){
   $('analyticsSection').style.display = 'block';
-  $('partnerTableD').innerHTML = '';
-  $('opponentTableD').innerHTML = '';
-  $('opponentTableS').innerHTML = '';
-  $('matchNote').textContent = 'Fetching full match history — long careers can take a minute…';
+  $('partnerTable').innerHTML = '';
+  $('opponentTableD').innerHTML = ''; $('opponentTableS').innerHTML = '';
+  $('matchNote').textContent = 'Fetching full match history — long careers can take a minute\u2026';
   try {
     const d = await api('/api/match-history/' + state.player.id);
     state.allMatches = d.matches || [];
-    // Compute stats separately for doubles and singles
-    const doublesStats = computeStatsForFormat(state.allMatches, 'DOUBLES');
-    const singlesStats = computeStatsForFormat(state.allMatches, 'SINGLES');
-    state.stats = { doubles: doublesStats, singles: singlesStats };
+    computeStats(state.allMatches);
     renderTables();
     $('h2hSection').style.display = 'block';
     $('h2hSummary').textContent = 'Type a name to see your full history together.';
@@ -557,19 +534,109 @@ async function loadAnalytics(){
   }
 }
 
-// ---------- table rendering ----------
+// Is this match singles or doubles? Trust DUPR's own format field when it's
+// present; otherwise fall back to the roster shape (a singles match has one
+// player per side, so no team carries a player2).
+function matchFormat(m){
+  const raw = String(m.eventFormat || m.matchType || m.format || '').toUpperCase();
+  if (raw.indexOf('SINGLE') !== -1) return 'SINGLES';
+  if (raw.indexOf('DOUBLE') !== -1) return 'DOUBLES';
+  const hasP2 = (m.teams || []).some(t =>
+    t && t.player2 && (t.player2.id || t.player2.fullName));
+  return hasP2 ? 'DOUBLES' : 'SINGLES';
+}
+
+// Per-match rating impact for one player slot (1 or 2). DUPR keeps singles and
+// doubles impacts in differently-named fields; prefer the one matching the
+// match format and only fall back to the other if it isn't populated.
+function ratingImpact(pre, fmt, slot){
+  if (!pre) return null;
+  const keys = fmt === 'SINGLES'
+    ? ['matchSingleRatingImpactPlayer' + slot, 'matchDoubleRatingImpactPlayer' + slot]
+    : ['matchDoubleRatingImpactPlayer' + slot, 'matchSingleRatingImpactPlayer' + slot];
+  for (const k of keys) if (typeof pre[k] === 'number') return pre[k];
+  return null;
+}
+
+function computeStats(matches){
+  const meId = String(state.player.id);
+  const meName = (state.player.fullName || '').trim().toLowerCase();
+  const isMe = p => p && (String(p.id) === meId ||
+    (p.fullName || '').trim().toLowerCase() === meName);
+
+  const partners = new Map(), oppD = new Map(), oppS = new Map();
+  const bump = (map, name, won, delta) => {
+    const s = map.get(name) || {w:0, l:0, gp:0, delta:0};
+    s.gp++; won ? s.w++ : s.l++;
+    if (delta != null && isFinite(delta)) s.delta += delta;
+    map.set(name, s);
+  };
+
+  let counted = 0, nDoubles = 0, nSingles = 0;
+  matches.forEach(m => {
+    const teams = m.teams || [];
+    if (teams.length < 2) return;
+    let mine = null, theirs = null;
+    teams.forEach(t => {
+      if ([t.player1, t.player2].some(isMe)) mine = t; else theirs = t;
+    });
+    if (!mine || !theirs) return;
+    counted++;
+    const fmt = matchFormat(m);
+    fmt === 'SINGLES' ? nSingles++ : nDoubles++;
+    const won = mine.winner === true;
+
+    // my per-match rating impact, keyed by whether I'm player1 or player2
+    const pre = mine.preMatchRatingAndImpact || {};
+    const delta = isMe(mine.player1) ? ratingImpact(pre, fmt, 1)
+                : isMe(mine.player2) ? ratingImpact(pre, fmt, 2) : null;
+
+    // partners only exist in doubles
+    if (fmt === 'DOUBLES'){
+      [mine.player1, mine.player2].forEach(p => {
+        if (p && !isMe(p) && (p.fullName || p.id))
+          bump(partners, p.fullName || ('#'+p.id), won, delta);
+      });
+    }
+    const oppMap = fmt === 'SINGLES' ? oppS : oppD;
+    [theirs.player1, theirs.player2].forEach(p => {
+      if (p && (p.fullName || p.id))
+        bump(oppMap, p.fullName || ('#'+p.id), won, delta);
+    });
+  });
+
+  state.partnerStats  = partners;
+  state.opponentStatsD = oppD;
+  state.opponentStatsS = oppS;
+  $('matchNote').textContent = 'Based on ' + counted + ' matches (' + nDoubles +
+    ' doubles · ' + nSingles + ' singles) · W\u2013L and DUPR +/- shown from ' +
+    (state.player.fullName || 'this player') + "'s side";
+}
+
 const esc = s => String(s).replace(/[&<>"]/g,
   c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const cls = v => v > 0 ? 'pos' : (v < 0 ? 'neg' : 'zero');
 const signed = (v, dp) => (v >= 0 ? '+' : '') + v.toFixed(dp);
 
+function renderTables(){
+  if (!state.partnerStats) return;
+  const min = Math.max(1, parseInt($('minMatches').value) || 1);
+  $('minLabelP').textContent  = '(min ' + min + ' matches)';
+  $('minLabelOD').textContent = '(min ' + min + ' matches)';
+  $('minLabelOS').textContent = '(min ' + min + ' matches)';
+  fillTable('partnerTable', state.partnerStats, min);
+  fillTable('opponentTableD', state.opponentStatsD, min);
+  fillTable('opponentTableS', state.opponentStatsS, min);
+}
+
+// column definitions: key -> label; numeric columns default to descending
 const COLS = [
   ['name','Player'], ['w','W'], ['l','L'], ['gp','GP'],
   ['winPct','Win %'], ['delta','DUPR +/-'], ['perMatch','Per Match'],
 ];
-
+// per-table sort state (click a header to sort by it; click again to flip)
 state.tableSort = {
-  partnerTableD:  {key:'perMatch', dir:-1},
+  partnerTable:   {key:'perMatch', dir:-1},
   opponentTableD: {key:'perMatch', dir:-1},
   opponentTableS: {key:'perMatch', dir:-1},
 };
@@ -615,29 +682,7 @@ function fillTable(id, map, min){
   });
 }
 
-function renderTables(){
-  if (!state.stats) return;
-  const min = Math.max(1, parseInt($('minMatches').value) || 1);
-  const { doubles, singles } = state.stats;
-  // Update min labels
-  $('minLabelPD').textContent = '(min ' + min + ' matches)';
-  $('minLabelOD').textContent = '(min ' + min + ' matches)';
-  $('minLabelOS').textContent = '(min ' + min + ' matches)';
-
-  // Fill the three tables
-  fillTable('partnerTableD', doubles.partners, min);
-  fillTable('opponentTableD', doubles.opponents, min);
-  fillTable('opponentTableS', singles.opponents, min);
-
-  // Update match note with counts
-  const dCount = state.allMatches.filter(m => (m.format || '').toUpperCase() === 'DOUBLES').length;
-  const sCount = state.allMatches.filter(m => (m.format || '').toUpperCase() === 'SINGLES').length;
-  $('matchNote').textContent = 'Based on ' + state.allMatches.length + ' matches total · ' +
-    dCount + ' Doubles · ' + sCount + ' Singles · W–L and DUPR +/- shown from ' +
-    (state.player.fullName || 'this player') + "'s side.";
-}
-
-// ---------- head-to-head search ----------
+// ---------- head-to-head player search ----------
 function findPlayerHistory(matches, query){
   const q = query.trim().toLowerCase();
   if (!q) return [];
@@ -667,14 +712,15 @@ function findPlayerHistory(matches, query){
     }
     if (!role) return;
 
+    const fmt = matchFormat(m);
     const minePre = mine.preMatchRatingAndImpact || {};
     const theirPre = theirs.preMatchRatingAndImpact || {};
-    const myDelta = isMe(mine.player1) ? minePre.matchDoubleRatingImpactPlayer1
-                   : isMe(mine.player2) ? minePre.matchDoubleRatingImpactPlayer2 : null;
+    const myDelta = isMe(mine.player1) ? ratingImpact(minePre, fmt, 1)
+                   : isMe(mine.player2) ? ratingImpact(minePre, fmt, 2) : null;
     const matchedDelta = role === 'partner'
-      ? (isMe(mine.player1) ? minePre.matchDoubleRatingImpactPlayer2 : minePre.matchDoubleRatingImpactPlayer1)
-      : (theirs.player1 && String(theirs.player1.id) === String(matched.id)
-          ? theirPre.matchDoubleRatingImpactPlayer1 : theirPre.matchDoubleRatingImpactPlayer2);
+      ? ratingImpact(minePre, fmt, isMe(mine.player1) ? 2 : 1)
+      : ratingImpact(theirPre, fmt,
+          theirs.player1 && String(theirs.player1.id) === String(matched.id) ? 1 : 2);
 
     const games = [1,2,3,4,5]
       .map(n => ({me: mine['game'+n], opp: theirs['game'+n]}))
@@ -682,7 +728,7 @@ function findPlayerHistory(matches, query){
 
     results.push({
       date: m.eventDate || '',
-      format: (m.format || '').toUpperCase(),
+      format: fmt === 'SINGLES' ? 'Singles' : 'Doubles',
       role,
       matchedName: matched.fullName || ('#'+matched.id),
       won: mine.winner === true,
@@ -713,19 +759,21 @@ function renderH2H(){
   const wins = rows.filter(r => r.won).length;
   const losses = rows.length - wins;
   const net = rows.reduce((s,r) => s + (r.myDelta || 0), 0);
-  $('h2hSummary').textContent = rows.length + ' matches vs/with "' + q + '" · ' +
-    wins + '-' + losses + ' · net DUPR ' + signed(net, 4);
+  const nS = rows.filter(r => r.format === 'Singles').length;
+  $('h2hSummary').textContent = rows.length + ' matches vs/with "' + q + '" (' +
+    (rows.length - nS) + ' doubles \u00b7 ' + nS + ' singles) \u00b7 ' +
+    wins + '-' + losses + ' \u00b7 net DUPR ' + signed(net, 4);
 
   $('h2hTable').innerHTML =
-    '<tr><th>Date</th><th>Format</th><th>Role</th><th>W/L</th><th>Score</th><th>Your Δ</th><th>Their Δ</th><th>Event</th></tr>' +
+    '<tr><th>Date</th><th>Type</th><th>Role</th><th>W/L</th><th>Score</th><th>Your \u0394</th><th>Their \u0394</th><th>Event</th></tr>' +
     rows.map(r =>
       '<tr><td style="text-align:left">' + esc(r.date) + '</td>' +
-      '<td>' + esc(r.format) + '</td>' +
+      '<td style="text-align:left">' + r.format + '</td>' +
       '<td style="text-align:left">' + r.role + '</td>' +
       '<td>' + (r.won ? 'W' : 'L') + '</td>' +
       '<td>' + esc(r.scoreStr) + '</td>' +
-      '<td class="' + cls(r.myDelta || 0) + '">' + (r.myDelta != null ? signed(r.myDelta, 4) : '–') + '</td>' +
-      '<td class="' + cls(r.matchedDelta || 0) + '">' + (r.matchedDelta != null ? signed(r.matchedDelta, 4) : '–') + '</td>' +
+      '<td class="' + cls(r.myDelta || 0) + '">' + (r.myDelta != null ? signed(r.myDelta, 4) : '\u2013') + '</td>' +
+      '<td class="' + cls(r.matchedDelta || 0) + '">' + (r.matchedDelta != null ? signed(r.matchedDelta, 4) : '\u2013') + '</td>' +
       '<td style="text-align:left">' + esc(r.event) + '</td></tr>'
     ).join('');
 }
