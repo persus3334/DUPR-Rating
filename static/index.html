@@ -79,6 +79,9 @@
   td{text-align:right;padding:7px 10px;border-bottom:1px solid #16203a;font-variant-numeric:tabular-nums}
   .pos{color:var(--mint)} .neg{color:var(--red)} .zero{color:var(--muted)}
 
+  /* head-to-head search */
+  #h2hSection{display:none}
+
   footer{color:#333;font-size:.75rem;text-align:center;margin-top:40px}
   @media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
 </style>
@@ -160,6 +163,16 @@
     </div>
   </section>
 
+  <!-- HEAD-TO-HEAD SEARCH -->
+  <section class="card" id="h2hSection">
+    <h2>Search a Player</h2>
+    <div class="row">
+      <div><label for="h2hInput">Player name</label><input id="h2hInput" placeholder="e.g. Toby Khan"></div>
+    </div>
+    <p class="note" id="h2hSummary"></p>
+    <div class="tblWrap"><table id="h2hTable"></table></div>
+  </section>
+
   <footer>DUPR Dashboard · not affiliated with DUPR</footer>
 </div>
 
@@ -173,6 +186,7 @@ const state = {
   partnerStats: null,  // Map name -> {w,l,gp,delta}
   opponentStats: null,
   matchesFor: null,
+  allMatches: null,     // raw match list, kept for head-to-head search
 };
 
 // ---------- api ----------
@@ -496,8 +510,13 @@ async function loadAnalytics(){
   $('matchNote').textContent = 'Fetching full match history — long careers can take a minute\u2026';
   try {
     const d = await api('/api/match-history/' + state.player.id);
-    computeStats(d.matches || []);
+    state.allMatches = d.matches || [];
+    computeStats(state.allMatches);
     renderTables();
+    $('h2hSection').style.display = 'block';
+    $('h2hSummary').textContent = 'Type a name to see your full history together.';
+    $('h2hInput').value = '';
+    $('h2hTable').innerHTML = '';
   } catch(e){
     $('matchNote').textContent = 'Match stats unavailable: ' + e.message;
   }
@@ -618,6 +637,103 @@ function fillTable(id, map, min){
     };
   });
 }
+
+// ---------- head-to-head player search ----------
+function findPlayerHistory(matches, query){
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+
+  const meId = String(state.player.id);
+  const meName = (state.player.fullName || '').trim().toLowerCase();
+  const isMe = p => p && (String(p.id) === meId ||
+    (p.fullName || '').trim().toLowerCase() === meName);
+
+  const results = [];
+  matches.forEach(m => {
+    const teams = m.teams || [];
+    if (teams.length < 2) return;
+    let mine = null, theirs = null;
+    teams.forEach(t => { if ([t.player1, t.player2].some(isMe)) mine = t; else theirs = t; });
+    if (!mine || !theirs) return;
+
+    const partner = [mine.player1, mine.player2].find(p => p && !isMe(p));
+    const opps = [theirs.player1, theirs.player2].filter(Boolean);
+
+    let role = null, matched = null;
+    if (partner && (partner.fullName || '').toLowerCase().includes(q)){
+      role = 'partner'; matched = partner;
+    } else {
+      const opp = opps.find(p => (p.fullName || '').toLowerCase().includes(q));
+      if (opp){ role = 'opponent'; matched = opp; }
+    }
+    if (!role) return;
+
+    const minePre = mine.preMatchRatingAndImpact || {};
+    const theirPre = theirs.preMatchRatingAndImpact || {};
+    const myDelta = isMe(mine.player1) ? minePre.matchDoubleRatingImpactPlayer1
+                   : isMe(mine.player2) ? minePre.matchDoubleRatingImpactPlayer2 : null;
+    const matchedDelta = role === 'partner'
+      ? (isMe(mine.player1) ? minePre.matchDoubleRatingImpactPlayer2 : minePre.matchDoubleRatingImpactPlayer1)
+      : (theirs.player1 && String(theirs.player1.id) === String(matched.id)
+          ? theirPre.matchDoubleRatingImpactPlayer1 : theirPre.matchDoubleRatingImpactPlayer2);
+
+    const games = [1,2,3,4,5]
+      .map(n => ({me: mine['game'+n], opp: theirs['game'+n]}))
+      .filter(g => g.me !== -1 && g.opp !== -1 && g.me != null);
+
+    results.push({
+      date: m.eventDate || '',
+      role,
+      matchedName: matched.fullName || ('#'+matched.id),
+      won: mine.winner === true,
+      scoreStr: games.map(g => g.me + '-' + g.opp).join(', '),
+      myDelta: typeof myDelta === 'number' ? myDelta : null,
+      matchedDelta: typeof matchedDelta === 'number' ? matchedDelta : null,
+      event: m.league || m.tournament || '',
+    });
+  });
+
+  results.sort((a,b) => new Date(b.date) - new Date(a.date));
+  return results;
+}
+
+function renderH2H(){
+  const q = $('h2hInput').value;
+  if (!q.trim()){
+    $('h2hSummary').textContent = 'Type a name to see your full history together.';
+    $('h2hTable').innerHTML = '';
+    return;
+  }
+  const rows = findPlayerHistory(state.allMatches || [], q);
+  if (!rows.length){
+    $('h2hSummary').textContent = 'No matches found for "' + q + '".';
+    $('h2hTable').innerHTML = '';
+    return;
+  }
+  const wins = rows.filter(r => r.won).length;
+  const losses = rows.length - wins;
+  const net = rows.reduce((s,r) => s + (r.myDelta || 0), 0);
+  $('h2hSummary').textContent = rows.length + ' matches vs/with "' + q + '" \u00b7 ' +
+    wins + '-' + losses + ' \u00b7 net DUPR ' + signed(net, 4);
+
+  $('h2hTable').innerHTML =
+    '<tr><th>Date</th><th>Role</th><th>W/L</th><th>Score</th><th>Your \u0394</th><th>Their \u0394</th><th>Event</th></tr>' +
+    rows.map(r =>
+      '<tr><td style="text-align:left">' + esc(r.date) + '</td>' +
+      '<td style="text-align:left">' + r.role + '</td>' +
+      '<td>' + (r.won ? 'W' : 'L') + '</td>' +
+      '<td>' + esc(r.scoreStr) + '</td>' +
+      '<td class="' + cls(r.myDelta || 0) + '">' + (r.myDelta != null ? signed(r.myDelta, 4) : '\u2013') + '</td>' +
+      '<td class="' + cls(r.matchedDelta || 0) + '">' + (r.matchedDelta != null ? signed(r.matchedDelta, 4) : '\u2013') + '</td>' +
+      '<td style="text-align:left">' + esc(r.event) + '</td></tr>'
+    ).join('');
+}
+
+let h2hDebounce;
+$('h2hInput').addEventListener('input', () => {
+  clearTimeout(h2hDebounce);
+  h2hDebounce = setTimeout(renderH2H, 150);
+});
 
 // ---------- boot ----------
 window.addEventListener('error', e => {
