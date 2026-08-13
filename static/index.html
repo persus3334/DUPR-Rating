@@ -173,7 +173,7 @@
   <section class="card" id="h2hSection">
     <h2>Search a Player</h2>
     <div class="row">
-      <div><label for="h2hInput">Player name</label><input id="h2hInput" placeholder="e.g. Toby Khan"></div>
+      <div><label for="h2hInput">Player name</label><input id="h2hInput" placeholder="e.g. John Doe"></div>
     </div>
     <p class="note" id="h2hSummary"></p>
     <div class="tblWrap"><table id="h2hTable"></table></div>
@@ -275,7 +275,6 @@ async function buildDashboard(){
   // header + pills
   $('playerHead').style.display = 'block';
   $('playerName').textContent = state.player.fullName;
-  $('playerId').textContent = 'ID: ' + state.player.id + (state.player.duprId ? ' · ' + state.player.duprId : '');
   $('pillDoubles').textContent = dRows.length ? dRows[dRows.length-1].rating.toFixed(3) : 'N/A';
   $('pillSingles').textContent = sRows.length ? sRows[sRows.length-1].rating.toFixed(3) : 'N/A';
 
@@ -604,9 +603,6 @@ function computeStats(matches){
   state.partnerStats  = partners;
   state.opponentStatsD = oppD;
   state.opponentStatsS = oppS;
-  $('matchNote').textContent = 'Based on ' + counted + ' matches (' + nDoubles +
-    ' doubles · ' + nSingles + ' singles) · W\u2013L and DUPR +/- shown from ' +
-    (state.player.fullName || 'this player') + "'s side";
 }
 
 const esc = s => String(s).replace(/[&<>"]/g,
