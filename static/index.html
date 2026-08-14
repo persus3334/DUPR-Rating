@@ -756,12 +756,13 @@ function renderH2H(){
     (rows.length - nS) + ' doubles \u00b7 ' + nS + ' singles) \u00b7 ' +
     wins + '-' + losses + ' \u00b7 net DUPR ' + signed(net, 4);
 
-  $('h2hTable').innerHTML =
-    '<tr><th>Date</th><th>Type</th><th>Role</th><th>W/L</th><th>Score</th><th>Your \u0394</th><th>Their \u0394</th><th>Event</th></tr>' +
+$('h2hTable').innerHTML =
+    '<tr><th>Date</th><th>Type</th><th>Role</th><th>Name</th><th>W/L</th><th>Score</th><th>Your \u0394</th><th>Their \u0394</th><th>Event</th></tr>' +
     rows.map(r =>
       '<tr><td style="text-align:left">' + esc(r.date) + '</td>' +
       '<td style="text-align:left">' + r.format + '</td>' +
       '<td style="text-align:left">' + r.role + '</td>' +
+      '<td style="text-align:left">' + esc(r.matchedName) + '</td>' +
       '<td>' + (r.won ? 'W' : 'L') + '</td>' +
       '<td>' + esc(r.scoreStr) + '</td>' +
       '<td class="' + cls(r.myDelta || 0) + '">' + (r.myDelta != null ? signed(r.myDelta, 4) : '\u2013') + '</td>' +
