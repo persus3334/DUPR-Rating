@@ -752,9 +752,6 @@ function renderH2H(){
   const losses = rows.length - wins;
   const net = rows.reduce((s,r) => s + (r.myDelta || 0), 0);
   const nS = rows.filter(r => r.format === 'Singles').length;
-  $('h2hSummary').textContent = rows.length + ' matches vs/with "' + q + '" (' +
-    (rows.length - nS) + ' doubles \u00b7 ' + nS + ' singles) \u00b7 ' +
-    wins + '-' + losses + ' \u00b7 net DUPR ' + signed(net, 4);
 
 $('h2hTable').innerHTML =
     '<tr><th>Date</th><th>Type</th><th>Role</th><th>Name</th><th>W/L</th><th>Score</th><th>Your \u0394</th><th>Their \u0394</th><th>Event</th></tr>' +
