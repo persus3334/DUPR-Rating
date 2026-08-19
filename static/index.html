@@ -119,6 +119,17 @@
     <div class="row">
       <div><label for="duprId">DUPR ID (e.g. ABCDEF)</label><input id="duprId" placeholder="ABCDEF"></div>
       <div class="tight"><label for="minMatches">Min matches</label><input id="minMatches" type="number" min="1" step="1" value="10"></div>
+      <div class="tight"><label for="rangeAmount">Last</label><input id="rangeAmount" type="number" min="1" step="1" placeholder="All time" style="width:100px"></div>
+      <div class="tight">
+        <label for="rangeUnit">Unit</label>
+        <select id="rangeUnit" style="padding:10px 12px;border-radius:4px;border:1px solid var(--border);
+                background:#0a101c;color:var(--ink);font:inherit;font-size:15px">
+          <option value="days">Days</option>
+          <option value="weeks">Weeks</option>
+          <option value="months" selected>Months</option>
+          <option value="years">Years</option>
+        </select>
+      </div>
       <div class="tight"><button class="primary" id="searchBtn">Generate</button></div>
       <div class="tight"><button class="primary" id="meBtn" style="background:#111a2b;color:var(--mint);border:1px solid var(--border)">My dashboard</button></div>
     </div>
@@ -193,7 +204,9 @@ const state = {
   opponentStatsD: null, // doubles opponents
   opponentStatsS: null, // singles opponents
   matchesFor: null,
-  allMatches: null,     // raw match list, kept for head-to-head search
+  allMatches: null,     // filtered match list (within current time range), used for tables + head-to-head
+  rawHistory: null,     // raw {DOUBLES, SINGLES} rating-history API responses, cached per player
+  allMatchesRaw: null,  // raw match-history API response, cached per player
 };
 
 // ---------- api ----------
@@ -253,6 +266,36 @@ $('meBtn').onclick = async () => {
 };
 $('minMatches').addEventListener('change', () => renderTables());
 
+// Turns the rangeAmount + rangeUnit controls into a cutoff timestamp (ms).
+// Returns null when the amount is blank/invalid, meaning "all time".
+function getGlobalCutoff(){
+  const amt = parseInt($('rangeAmount').value, 10);
+  if (!amt || amt <= 0) return null;
+  const unit = $('rangeUnit').value;
+  const cutoff = new Date();
+  switch(unit){
+    case 'days':   cutoff.setDate(cutoff.getDate() - amt); break;
+    case 'weeks':  cutoff.setDate(cutoff.getDate() - amt * 7); break;
+    case 'months': cutoff.setMonth(cutoff.getMonth() - amt); break;
+    case 'years':  cutoff.setFullYear(cutoff.getFullYear() - amt); break;
+  }
+  return cutoff.getTime();
+}
+
+// Re-render everything from the cached raw data whenever the filter changes
+// (debounced) — no re-fetching needed.
+let rangeDebounce;
+function onRangeChange(){
+  clearTimeout(rangeDebounce);
+  rangeDebounce = setTimeout(() => {
+    if (!state.rawHistory) return;      // no dashboard built yet
+    renderRatingViews();
+    if (state.allMatchesRaw) renderAnalyticsAndH2H();
+  }, 150);
+}
+$('rangeAmount').addEventListener('input', onRangeChange);
+$('rangeUnit').addEventListener('change', onRangeChange);
+
 async function buildDashboard(){
   $('searchError').textContent = 'Fetching rating history\u2026';
   const [d, s] = await Promise.all([
@@ -261,16 +304,41 @@ async function buildDashboard(){
   ]);
   $('searchError').textContent = '';
 
-  // keep the untouched API records for export/debugging
+  // keep the untouched API records so the time filter can be re-applied
+  // later without re-fetching
   state.rawHistory = {DOUBLES: d.history || [], SINGLES: s.history || []};
-  const leakFix = stripCrossTypeLeaks(d.history || [], s.history || []);
+  if (!state.player.fullName) state.player.fullName = d.fullName || s.fullName || ('Player ' + state.player.id);
+
+  renderRatingViews();
+
+  // analytics (fetch match list once per player, then re-filtered locally)
+  if (state.matchesFor !== state.player.id){
+    state.matchesFor = state.player.id;
+    await loadAnalytics();
+  } else {
+    renderAnalyticsAndH2H();
+  }
+}
+
+// Applies the global cutoff to the cached raw rating history, runs the
+// cleaning/spike-filter pipeline, and redraws the pills + all four charts.
+function renderRatingViews(){
+  const cutoff = getGlobalCutoff();
+  const filterByCutoff = arr => cutoff == null ? arr : arr.filter(h => {
+    const t = Date.parse(h.matchDate);
+    return isFinite(t) && t >= cutoff;
+  });
+
+  const dRaw = filterByCutoff(state.rawHistory.DOUBLES);
+  const sRaw = filterByCutoff(state.rawHistory.SINGLES);
+
+  const leakFix = stripCrossTypeLeaks(dRaw, sRaw);
   const dSpike = stripSpikes(cleanRows(leakFix.d));
   const sSpike = stripSpikes(cleanRows(leakFix.s));
   if (dSpike.removed.length || sSpike.removed.length){
     console.warn('[spike filter] removed:', [...dSpike.removed, ...sSpike.removed]);
   }
   const dRows = dSpike.kept, sRows = sSpike.kept;
-  if (!state.player.fullName) state.player.fullName = d.fullName || s.fullName || ('Player ' + state.player.id);
 
   // header + pills
   $('playerHead').style.display = 'block';
@@ -302,12 +370,6 @@ async function buildDashboard(){
       try { drawChart(id, rows); }
       catch(e){ $('searchError').textContent = 'Chart error (' + id + '): ' + e.message; }
     }
-  }
-
-  // analytics (once per player)
-  if (state.matchesFor !== state.player.id){
-    state.matchesFor = state.player.id;
-    loadAnalytics();
   }
 }
 
@@ -517,16 +579,29 @@ async function loadAnalytics(){
   $('matchNote').textContent = 'Fetching full match history — long careers can take a minute\u2026';
   try {
     const d = await api('/api/match-history/' + state.player.id);
-    state.allMatches = d.matches || [];
-    computeStats(state.allMatches);
-    renderTables();
+    state.allMatchesRaw = d.matches || [];
     $('h2hSection').style.display = 'block';
-    $('h2hSummary').textContent = 'Type a name to see your full history together.';
     $('h2hInput').value = '';
-    $('h2hTable').innerHTML = '';
+    renderAnalyticsAndH2H();
   } catch(e){
     $('matchNote').textContent = 'Match stats unavailable: ' + e.message;
   }
+}
+
+// Applies the global cutoff to the cached raw match list, then recomputes
+// partner/opponent stats and resets the head-to-head search box.
+function renderAnalyticsAndH2H(){
+  const cutoff = getGlobalCutoff();
+  state.allMatches = cutoff == null
+    ? state.allMatchesRaw
+    : state.allMatchesRaw.filter(m => {
+        const t = Date.parse(m.eventDate);
+        return isFinite(t) && t >= cutoff;
+      });
+  computeStats(state.allMatches);
+  renderTables();
+  $('h2hSummary').textContent = 'Type a name to see your full history together.';
+  $('h2hTable').innerHTML = '';
 }
 
 // Is this match singles or doubles? Trust DUPR's own format field when it's
